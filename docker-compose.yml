@@ -1,0 +1,78 @@
+services:
+  # --- THE GATEWAY (VPN) ---
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: vpn_gateway
+    cap_add: [NET_ADMIN] # Removed SYS_MODULE as logs say it's not needed
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Paris
+      - SERVERURL=127.0.0.1
+      - PEERS=admin,prof,student
+      - ALLOWEDIPS=10.0.0.0/16
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      # This maps the generated configs to your G:\...\Work\config folder
+      - ./config/wireguard:/config 
+    networks:
+      admin_net:   { ipv4_address: 10.0.10.2 }
+      profs_net:   { ipv4_address: 10.0.20.2 }
+      eleves_net:  { ipv4_address: 10.0.30.2 }
+      dmz_net:     { ipv4_address: 10.0.40.2 }
+      backup_net:  { ipv4_address: 10.0.50.2 }
+
+  # --- SRV1: DEBIAN AD ---
+  srv1-ad:
+    image: debian:bookworm-slim
+    container_name: srv1_ad
+    command: sh -c "apt-get update && apt-get install -y samba && tail -f /dev/null"
+    volumes:
+      - samba_data:/var/lib/samba
+      - shared_data:/mnt/shared # Shared space
+    networks:
+      dmz_net: { ipv4_address: 10.0.40.10 }
+
+  # --- SRV2: NEXTCLOUD ---
+  srv2-files:
+    image: nextcloud:apache
+    container_name: srv2_nextcloud
+    volumes:
+      - nextcloud_data:/var/www/html
+      - shared_data:/mnt/shared # Nextcloud can see the Samba files here
+    networks:
+      dmz_net: { ipv4_address: 10.0.40.20 }
+
+  # --- SRV3: WEB ---
+  srv3-web:
+    image: nginx:alpine
+    container_name: srv3_web
+    volumes:
+      - ./www:/usr/share/nginx/html:ro
+    networks:
+      dmz_net: { ipv4_address: 10.0.40.30 }
+
+  # --- SRV4: BACKUP ---
+  srv4-backup:
+    image: debian:bookworm-slim
+    container_name: srv4_backup
+    command: sh -c "apt-get update && apt-get install -y borgbackup && tail -f /dev/null"
+    volumes:
+      - backup_storage:/mnt/borg_repository
+      - shared_data:/mnt/shared:ro # Read-only access for backups
+    networks:
+      backup_net: { ipv4_address: 10.0.50.10 }
+
+networks:
+  admin_net:  { driver: bridge, ipam: { config: [{ subnet: 10.0.10.0/24 }] } }
+  profs_net:  { driver: bridge, ipam: { config: [{ subnet: 10.0.20.0/24 }] } }
+  eleves_net: { driver: bridge, ipam: { config: [{ subnet: 10.0.30.0/24 }] } }
+  dmz_net:    { driver: bridge, ipam: { config: [{ subnet: 10.0.40.0/24 }] } }
+  backup_net: { driver: bridge, ipam: { config: [{ subnet: 10.0.50.0/24 }] } }
+
+volumes:
+  samba_data:
+  nextcloud_data:
+  backup_storage:
+  shared_data: # The global shared volume
